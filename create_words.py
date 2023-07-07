@@ -5,12 +5,12 @@ from typing import List
 
 def read_all() -> List[str]:
     """Reads all the words"""
-    with open('rsrc/corncob.txt') as f:
+    with open('resources/corncob.txt') as f:
         return f.readlines()
 
 
 def write_all(words: List[str]):
-    with open('rsrc/words.txt', 'w') as f:
+    with open('resources/words.txt', 'w') as f:
         f.writelines(w + '\n' for w in words)
 
 

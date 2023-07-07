@@ -3,7 +3,7 @@ from __future__ import annotations
 import dataclasses
 from typing import List
 
-with open('rsrc/words.txt') as f:
+with open('resources/words.txt') as f:
     _DICT = set(f.replace('\n', '') for f in f.readlines())
 
 WORDS = sorted(_DICT)

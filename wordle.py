@@ -6,7 +6,7 @@ from typing import NamedTuple, Tuple
 
 from tqdm.contrib.concurrent import process_map
 
-with open('rsrc/words.txt') as f:
+with open('resources/words.txt') as f:
     _DICT = set(f.replace('\n', '') for f in f.readlines())
 
 WORDS = sorted(_DICT)
@@ -34,7 +34,7 @@ def _func(args):
 
 
 def _find_start_words(factors: Tuple[float, float]):
-    file_name = f'rsrc/cache/best_{factors[0]:.3f}_{factors[1]:.3f}.txt'
+    file_name = f'resources/cache/best_{factors[0]:.3f}_{factors[1]:.3f}.txt'
     try:
         with open(file_name, 'r') as f:
             tops = f.readline().split()
