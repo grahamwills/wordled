@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import pickle
-from collections import defaultdict
 from dataclasses import dataclass, field
 
 logging.basicConfig(level='DEBUG')
@@ -38,35 +37,14 @@ def pp(bb: [int]) -> str:
     return '|'.join(WORDS[b] for b in bb)
 
 
-# def evaluate(choice: int, target: int) -> bytes:
-#     r = SCORES[choice * N_WORDS + target]
-#     choice = WORDS[choice]
-#     target = WORDS[target]
-#     outcome = bytearray('-----', 'ascii')
-#     available = [c for c in target]
-#
-#     # Handle greens
-#     for i in range(5):
-#         if choice[i] == target[i]:
-#             outcome[i] = G
-#             available.remove(choice[i])
-#
-#     # Handle yellows
-#     for i in range(5):
-#         if outcome[i] == N and choice[i] in available:
-#             outcome[i] = Y
-#             available.remove(choice[i])
-#
-#     assert OUTCOMES[r] == bytes(outcome)
-#     return r
-
-
-def evaluate_possibilities(guess: int, possible: list[int], limit: int) -> dict[int, [int]] or None:
+def evaluate_possibilities(guess: int, possible: list[int], limit: int) -> [[int]] or None:
     """ limit is the largest set to split allowed"""
-    outcomes = defaultdict(lambda: [])
+    outcomes = [None] * 243
     for p in possible:
         guess_result = SCORES[guess * N_WORDS + p]
         which = outcomes[guess_result]
+        if not which:
+            outcomes[guess_result] = which = []
 
         if len(which) >= limit - 1:
             return None
@@ -160,7 +138,7 @@ def build_node_children(node: Node, max_children: int = 5) -> [Node]:
         if not outcomes:
             continue
 
-        longest = max(len(o) for o in outcomes.values())
+        longest = max(len(o) for o in outcomes if o)
         if len(best) < max_children:
             best.append((longest, c, outcomes))
         elif longest < best[-1][0]:
@@ -171,7 +149,7 @@ def build_node_children(node: Node, max_children: int = 5) -> [Node]:
 
     # Use the best ones
     for _, c, outcomes in best:
-        segments = [Segment(k, Node(v, depth=node.depth + 1)) for k, v in outcomes.items()]
+        segments = [Segment(k, Node(v, depth=node.depth + 1)) for k, v in enumerate(outcomes) if v]
         node.guesses.append((c, segments))
         child_nodes += [s.node for s in segments]
     return child_nodes
