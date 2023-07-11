@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import pickle
 from array import array
-from dataclasses import dataclass
 from datetime import datetime
-from typing import NamedTuple
+from typing import NamedTuple, Iterable, List
 
 from items import Word
 
@@ -43,25 +42,47 @@ class WordleContext:
         return self.words[index].freq
 
 
+class Statistics(NamedTuple):
+    n_words: int
+    n_unsolved: int
+    sum_depth: float
+    n_words_weighted: float
+    n_unsolved_weighted: float
+    sum_depth_weighted: float
+    max_depth: int
+
+    @classmethod
+    def sum(cls, stats: Iterable[Statistics]) -> Statistics:
+        n = 0
+        n_un = 0
+        sum_depth = 0
+        n_w = 0.0
+        n_un_w = 0.0
+        sum_depth_w = 0.0
+        max_depth = 0
+        for s in stats:
+            n += s.n_words
+            n_un += s.n_unsolved
+            sum_depth += s.sum_depth
+            n_w += s.n_words_weighted
+            n_un_w += s.n_unsolved_weighted
+            sum_depth_w += s.sum_depth_weighted
+            max_depth = max(max_depth, s.max_depth)
+        return Statistics(n, n_un, sum_depth, n_w, n_un_w, sum_depth_w, max_depth)
+
+
 class Attempt(NamedTuple):
     guess: int
     outcomes: [(int, Node)]
 
 
-class Statistics(NamedTuple):
-    n_words: int
-    n_unsolved: int
-    mean_depth: float
-    n_words_weighted: float
-    n_unsolved_weighted: float
-    mean_depth_weighted: float
-
-
-@dataclass
 class Node:
-    possible: [int]
-    attempts: [Attempt] = None
-    statistics: Statistics = None
+    __slots__ = ['possible', 'attempts', 'statistics']
+
+    def __init__(self, possibles: array):
+        self.possible = possibles
+        self.attempts = None
+        self.statistics = None
 
     def max_guesses_needed(self) -> int:
         if self.only_one_possible():
@@ -95,34 +116,41 @@ class Node:
     def only_one_possible(self) -> bool:
         return len(self.possible) < 2
 
-    def keep_best(self):
-        """ The best is the min/max -- the guess with the minimum worst case length """
-        if not self.attempts:
-            # No work needed
-            return
-        best = (None, 99)
-        for guess in self.attempts:
-            needed = 0
-            for _, s in guess.outcomes:
-                s.keep_best()
-                needed = max(needed, s.max_guesses_needed())
-            if needed < best[1]:
-                best = (guess, needed)
-        self.attempts = [best[0]]
-
-    def calculate_statistics(self, ctx: WordleContext, depth: int = 0) -> None:
-        if self.only_one_possible():
+    def keep_best(self, ctx: WordleContext, depth: int = 0):
+        """ Reduce the number of attempts to a single best option"""
+        if self.attempts:
+            best = (None, 99)
+            for guess in self.attempts:
+                needed = 0
+                for _, s in guess.outcomes:
+                    s.keep_best(ctx, depth + 1)
+                    needed = max(needed, s.max_guesses_needed())
+                if needed < best[1]:
+                    best = (guess, needed)
+            self.attempts = [best[0]]
+            self.statistics = Statistics.sum(node.statistics for _, node in best[0].outcomes)
+        else:
+            assert len(self.possible) == 1
             f = ctx.frequency(self.possible[0])
             n_unsolved = 0 if depth < 6 else 1
-            self.statistics = Statistics(1, n_unsolved, depth, f, f * n_unsolved, f * depth)
-        # else:
-        #     for c in self.guesses
+            self.statistics = Statistics(1, n_unsolved, depth, f, f * n_unsolved, f * depth, depth)
+
+    def display_statistics(self):
+        assert len(self.possible) == self.statistics.n_words
+        print(f"# Words    =                  {self.statistics.n_words}")
+        print(f"# Max Depth =                 {self.statistics.max_depth}")
+        print(f"# Unsolved % =                {100 * self.statistics.n_unsolved / self.statistics.n_words:.3f}%")
+        print(f"# Unsolved % (weighted) =     "
+              f"{100 * self.statistics.n_unsolved_weighted / self.statistics.n_words_weighted:.3f}%")
+        print(f"# Average Solves =            {1 + self.statistics.sum_depth / self.statistics.n_words:.3f}")
+        print(f"# Average Solves (weighted) = "
+              f"{1 + self.statistics.sum_depth_weighted / self.statistics.n_words_weighted:.3f}")
 
 
 def evaluate_possibilities(guess: int, possible: list[int],
-                           limit: int, scores: bytes, n_words: int) -> ([[int]], int) or None:
+                           limit: int, scores: bytes, n_words: int) -> ([array], int) or None:
     """ limit is the largest set to split allowed"""
-    outcomes = [None] * 243
+    outcomes:List[array or None] = [None] * 243
     longest = 0
     for p in possible:
         guess_result = scores[guess * n_words + p]
@@ -138,9 +166,8 @@ def evaluate_possibilities(guess: int, possible: list[int],
     return outcomes, longest
 
 
-def add_candidates_to_node(node: Node, best: [(int, [int])], needs_splitting: [Node]):
-    assert node.attempts is None
-    node.attempts = []
+def add_candidates_to_node(node: Node, best: [(int, array)], needs_splitting: [Node]):
+    attempts = []
     for c, outcomes in best:
         segments = []
         for k, v in enumerate(outcomes):
@@ -149,10 +176,11 @@ def add_candidates_to_node(node: Node, best: [(int, [int])], needs_splitting: [N
                 segments.append((k, child))
                 if len(v) > 1:
                     needs_splitting.append(child)
-        node.attempts.append(Attempt(c, segments))
+        attempts.append(Attempt(c, segments))
+    node.attempts = attempts
 
 
-def find_best_candidates(node, scores: bytes, n_words: int) -> [int, [int]]:
+def find_best_candidates(node, scores: bytes, n_words: int) -> [int, array]:
     candidates = node.possible
     # Sorted list, with the worst being the last
     best = []
@@ -161,7 +189,7 @@ def find_best_candidates(node, scores: bytes, n_words: int) -> [int, [int]]:
         outcomes, longest = evaluate_possibilities(c, node.possible, limit, scores, n_words)
         if not outcomes:
             continue
-        if len(best) < 5:  # 5 best candidates
+        if len(best) < MAX_CANDIDATES:  # 5 best candidates
             best.append((longest, c, outcomes))
         elif longest < best[-1][0]:
             # This is better than the worst of our best, so it replaces it
@@ -185,11 +213,13 @@ def step_downward(nodes: [Node], ctx: WordleContext) -> [Node]:
 
 
 if __name__ == '__main__':
+
+    t0 = datetime.now()
     ctx = WordleContext()
 
     # Initialize the processing list
-    EVERY = 10
-    top = Node([i for i in range(0, ctx.n_words) if i % EVERY == 0])
+    EVERY = 5
+    top = Node(array('i', (i for i in range(0, ctx.n_words) if i % EVERY == 0)))
     to_process = [top]
 
     # Loop until nothing left to process
@@ -197,6 +227,14 @@ if __name__ == '__main__':
     while to_process:
         to_process = step_downward(to_process, ctx)
 
-    top.calculate_statistics(ctx)
-    top.keep_best()
-    top.display(ctx)
+    t1 = datetime.now()
+
+    top.keep_best(ctx)
+
+    t2 = datetime.now()
+
+    top.display_statistics()
+
+    print(f"Time taken = {(t2 - t0).total_seconds()}s ({(t2 - t1).total_seconds()} to prune)")
+
+    # top.display(ctx)
