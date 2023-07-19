@@ -1,14 +1,13 @@
 import pickle
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, date
 from pathlib import Path
 from typing import List
 from urllib.request import urlopen
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup
 
-from items import Word
+from model import Word, Solution
 
 G = 71
 Y = 89
@@ -42,28 +41,6 @@ class DictionaryEntry:
 
     def is_noun(self):
         return self.pos == 'n.'
-
-
-@dataclass
-class Solution:
-    index: int
-    value: str
-    when: date
-
-    @classmethod
-    def from_triple(cls, ta: Tag, tb: Tag, tc: Tag):
-        a = str(ta.contents[0])
-        b = str(tb.contents[0])
-        c = str(tc.contents[0])
-        assert b[0] == '#'
-        return cls(
-            int(b[1:]),
-            c.lower(),
-            datetime.strptime(a, '%Y/%m/%d').date()
-        )
-
-    def __str__(self):
-        return f"{self.value} (#{self.index} - {self.when})"
 
 
 def read_words_5() -> [Word]:
