@@ -10,7 +10,7 @@ from typing import NamedTuple, Iterable, List, Tuple, Callable
 from bs4 import Tag
 
 HARD: bool = True
-MAX_CANDIDATES = 3
+MAX_CANDIDATES = 5
 
 
 class Word(NamedTuple):
@@ -141,6 +141,10 @@ def score_weighted_unsolved_first(stats: Iterable[Statistics]) -> float:
     return sum(s.n_unsolved_weighted + 1e-6 * s.sum_depth_weighted for s in stats)
 
 
+def score_weighted_average_first(stats: Iterable[Statistics]) -> float:
+    return sum(1e-6 * s.n_unsolved_weighted + s.sum_depth_weighted for s in stats)
+
+
 def score_unsolved_first(stats: Iterable[Statistics]) -> float:
     return sum(s.n_unsolved + 1e-6 * s.sum_depth for s in stats)
 
@@ -192,28 +196,6 @@ class Node:
 
     def __repr__(self):
         return f"〔{len(self.possible)} possibles, {len(self.attempts)} children〕"
-
-    def max_guesses_needed(self) -> int:
-        if self.only_one_possible():
-            return 0
-        if not self.attempts:
-            raise RuntimeError('should have guesses')
-        mx = 0
-        for a in self.attempts:
-            mx = max(mx, max(s.max_guesses_needed() for _, s in a.outcomes))
-        return 1 + mx
-
-    def display(self, depth: int = 0):
-        if depth > 1:
-            return
-        leader = '  ' * depth
-        print(leader, words_as_str(self.possible), ' [', self.max_guesses_needed(), ']', sep='')
-        for a in self.attempts:
-            print(leader, f"Guess@{depth}: {WORDS[a.guess]}", sep='')
-            for outcome, node in OUTCOMES:
-                print(leader, ' ', OUTCOMES[outcome], ': ', words_as_str(node.possible), sep='')
-                if not node.only_one_possible():
-                    node.display(depth + 1)
 
     def decides_outcome_immediately(self) -> bool:
         """ Don't need to follow any further; this guess solves it"""
@@ -280,7 +262,7 @@ class Node:
 def evaluate_possibilities(guess: int, possible: list[int], limit: int) -> ([array], int) or None:
     """ limit is the largest set to split allowed"""
     outcomes: List[array or None] = [None] * 243
-    longest = 0
+    longest = 1
     for p in possible:
         guess_result = SCORES[guess * N_WORDS + p]
         which = outcomes[guess_result]
@@ -309,7 +291,7 @@ def add_candidates_to_node(node: Node, best: [(int, array)], needs_splitting: [N
     node.attempts = attempts
 
 
-def find_best_candidates(node) -> [int, array]:
+def find_best_candidates(node) -> List[Tuple[int, array]]:
     # All possible words could be used
     candidates = node.possible if HARD else range(N_WORDS)
 
@@ -317,17 +299,24 @@ def find_best_candidates(node) -> [int, array]:
     best = []
     limit = 999999  # The worst we can tolerate
     for c in candidates:
-        outcomes, longest = evaluate_possibilities(c, node.possible, limit)
+        outcomes, candidate_score = evaluate_possibilities(c, node.possible, limit)
         if not outcomes:
             continue
+
+        if candidate_score == 1:
+            # This is the best we could ever have
+            return [(c, outcomes)]
+
         if len(best) < MAX_CANDIDATES:  # 5 best candidates
-            best.append((longest, c, outcomes))
-        elif longest < best[-1][0]:
+            best.append((candidate_score, c, outcomes))
+            if len(best) == MAX_CANDIDATES:
+                best.sort(key=lambda x: x[:-1])
+        elif candidate_score < limit:
             # This is better than the worst of our best, so it replaces it
-            limit = longest
-            best[-1] = (longest, c, outcomes)
+            best[-1] = (candidate_score, c, outcomes)
             best.sort(key=lambda x: x[:-1])
-    return [b[1:] for b in best]
+            limit = best[-1][0]
+    return [(b[1], b[2]) for b in best]
 
 
 def step_downward(nodes: [Node], ) -> [Node]:
@@ -367,11 +356,13 @@ if __name__ == '__main__':
     t1 = datetime.now()
 
     for name, scorer in [
-        ('Max Depth | Sum Depth', score_depth),
-        ('Unsolved | Average', score_unsolved_first),
+        # ('Max Depth | Sum Depth', score_depth),
+        # ('Unsolved | Average', score_unsolved_first),
         ('Unsolved | Average (Weighted)', score_weighted_unsolved_first),
+        # ('Average | Unsolved (Weighted)', score_weighted_average_first),
     ]:
-        top = base.copy()
+        print('Trying scoring method:', name)
+        top = base  # if we have multiple models need to copy: base.copy()
         t2 = datetime.now()
         top.keep_best(scorer)
         t3 = datetime.now()
