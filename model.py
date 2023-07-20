@@ -5,12 +5,14 @@ import pickle
 from array import array
 from dataclasses import dataclass
 from datetime import datetime, date
-from typing import NamedTuple, Iterable, List, Tuple, Callable
+from typing import NamedTuple, Iterable, List, Tuple, Callable, Dict
 
 from bs4 import Tag
 
 HARD: bool = True
-MAX_CANDIDATES = 5
+MAX_CANDIDATES = 10
+PRUNE_LIMIT = 100000
+EVERY = 5
 
 
 class Word(NamedTuple):
@@ -152,12 +154,13 @@ def score_unsolved_first(stats: Iterable[Statistics]) -> float:
 @dataclass
 class Attempt:
     guess: int
+    max_split_len: int
     outcomes: List[(int, Node)]
     _score: float = -1
 
     def copy(self) -> Attempt:
         outcomes = [(i, n.copy()) for i, n in self.outcomes]
-        return Attempt(self.guess, outcomes, -1)
+        return Attempt(self.guess, self.max_split_len, outcomes)
 
     def score(self, scorer: Callable[[Iterable[Statistics]], float]) -> float:
         if self._score < 0:
@@ -179,16 +182,28 @@ class Attempt:
         return f"<Attempt: {WORDS[self.guess]} → {len(self.outcomes)}>"
 
 
-class Node:
-    __slots__ = ['possible', 'attempts', 'statistics']
+class Candidate(NamedTuple):
+    max_split_len: int
+    guess: int
+    outcomes: Dict[int, array]
 
-    def __init__(self, possibles: array):
+
+    def __hash__(self):
+        return hash(tuple(self.outcomes.keys()))
+
+
+class Node:
+    __slots__ = ['possible', 'attempts', 'statistics', 'depth', 'parent']
+
+    def __init__(self, possibles: array, parent: Node or None = None):
+        self.parent = parent
+        self.depth = parent.depth + 1 if parent else 0
         self.possible = possibles
         self.attempts: List[Attempt] or None = None
         self.statistics: Statistics or None = None
 
     def copy(self) -> Node:
-        other = Node(self.possible)
+        other = Node(self.possible, self.parent)
         if self.attempts:
             other.attempts = [a.copy() for a in self.attempts]
         other.statistics = None
@@ -207,18 +222,18 @@ class Node:
     def only_one_possible(self) -> bool:
         return len(self.possible) < 2
 
-    def keep_best(self, scorer: Callable[[Iterable[Statistics]], float], depth: int = 0):
+    def keep_best(self, scorer: Callable[[Iterable[Statistics]], float]):
         """ Reduce the number of attempts to a single best option"""
         # First we follow the tree downward to set up all our children
         if self.attempts:
             best: Tuple[Attempt or None, float] = (None, 9e99)
             for a in self.attempts:
                 for _, s in a.outcomes:
-                    s.keep_best(scorer, depth + 1)
+                    s.keep_best(scorer)
                 score = a.score(scorer)
                 if score < best[1]:
                     best = (a, score)
-            if depth == 0:
+            if self.depth == 0:
                 # Keep all the top attempts
                 self.attempts = sorted(self.attempts, key=lambda a: a._score)
             else:
@@ -228,8 +243,8 @@ class Node:
         else:
             assert len(self.possible) == 1
             f = frequency(self.possible[0])
-            n_unsolved = 0 if depth < 6 else 1
-            self.statistics = Statistics(1, n_unsolved, depth, f, f * n_unsolved, f * depth, depth)
+            n_unsolved = 0 if self.depth < 6 else 1
+            self.statistics = Statistics(1, n_unsolved, self.depth, f, f * n_unsolved, f * self.depth, self.depth)
 
     def store(self, prefixes: dict, used: List[int]):
         keys = list(prefixes.keys())
@@ -259,74 +274,90 @@ class Node:
             return [f"{WORDS[self.possible[0]]}:GGGGG"]
 
 
-def evaluate_possibilities(guess: int, possible: list[int], limit: int) -> ([array], int) or None:
+def evaluate_possibilities(guess: int, possible: list[int], limit: int) -> dict[int, array] or None:
     """ limit is the largest set to split allowed"""
-    outcomes: List[array or None] = [None] * 243
-    longest = 1
+    outcomes = {}
     for p in possible:
         guess_result = SCORES[guess * N_WORDS + p]
-        which = outcomes[guess_result]
-        if which:
-            which.append(p)
-            longest = max(longest, len(which))
-            if longest >= limit:
-                return None, longest
-        else:
+        outcome_possibles = outcomes.get(guess_result, None)
+        if not outcome_possibles:
             outcomes[guess_result] = array('i', [p])
+        elif len(outcome_possibles) < limit:
+            outcome_possibles.append(p)
+        else:
+            return None
+    return outcomes
 
-    return outcomes, longest
 
-
-def add_candidates_to_node(node: Node, best: [(int, array)], needs_splitting: [Node]):
+def add_candidates_to_node(node: Node, candidates: [Candidate], needs_splitting: [Node]):
     attempts = []
-    for c, outcomes in best:
+    for c in candidates:
         segments = []
-        for k, v in enumerate(outcomes):
-            if v:
-                child = Node(v)
-                segments.append((k, child))
-                if len(v) > 1:
-                    needs_splitting.append(child)
-        attempts.append(Attempt(c, segments))
+        for k, v in c.outcomes.items():
+            child = Node(v, parent=node)
+            segments.append((k, child))
+            if len(v) > 1:
+                needs_splitting.append(child)
+        attempts.append(Attempt(c.guess, c.max_split_len, segments))
     node.attempts = attempts
 
 
-def find_best_candidates(node) -> List[Tuple[int, array]]:
+def find_best_candidates(node) -> List[Candidate]:
     # All possible words could be used
     candidates = node.possible if HARD else range(N_WORDS)
 
     # Sorted list, with the worst being the last
-    best = []
+    best: List[Candidate] = []
     limit = 999999  # The worst we can tolerate
     for c in candidates:
-        outcomes, candidate_score = evaluate_possibilities(c, node.possible, limit)
+        outcomes = evaluate_possibilities(c, node.possible, limit)
         if not outcomes:
             continue
 
-        if candidate_score == 1:
+        candidate_max_split_len = max(len(a) for a in outcomes.values())
+        candidate = Candidate(candidate_max_split_len, c, outcomes)
+        if candidate_max_split_len == 1:
             # This is the best we could ever have
-            return [(c, outcomes)]
-
+            return [candidate]
         if len(best) < MAX_CANDIDATES:  # 5 best candidates
-            best.append((candidate_score, c, outcomes))
+            best.append(candidate)
             if len(best) == MAX_CANDIDATES:
                 best.sort(key=lambda x: x[:-1])
-        elif candidate_score < limit:
+        elif candidate_max_split_len < limit:
             # This is better than the worst of our best, so it replaces it
-            best[-1] = (candidate_score, c, outcomes)
-            best.sort(key=lambda x: x[:-1])
-            limit = best[-1][0]
-    return [(b[1], b[2]) for b in best]
+            best[-1] = candidate
+            best.sort(key=lambda x: x.max_split_len + 1e-6 * x.guess)
+            limit = best[-1].max_split_len
+    return best
 
 
-def step_downward(nodes: [Node], ) -> [Node]:
+def step_downward(nodes: List[Node]) -> List[Node]:
     n = len(nodes)
     time0 = datetime.now()
     print(f'Processing {n} nodes', flush=True)
     next_nodes = []
+
+    node_candidates: List[ Tuple[Node, List[Candidate]]] = []
+    all_candidates = []
     for node in nodes:
-        best = find_best_candidates(node)
-        add_candidates_to_node(node, best, next_nodes)
+        candidates = find_best_candidates(node)
+        node_candidates.append((node, candidates))
+        all_candidates += candidates
+
+    if len(all_candidates) > PRUNE_LIMIT:
+        all_candidates = sorted(all_candidates, key=lambda c: c.max_split_len + c.guess * 1e-6)
+        valid = set(all_candidates[0:PRUNE_LIMIT])
+
+        for node, best in node_candidates:
+            allowed = [b for b in best if b in valid]
+            if not allowed:
+                allowed = [best[0]]
+            add_candidates_to_node(node, allowed, next_nodes)
+
+    else:
+        for node, best in node_candidates:
+            add_candidates_to_node(node, best, next_nodes)
+
     elapsed = (datetime.now() - time0).total_seconds()
     print(f'{n} nodes evaluated in {elapsed} seconds')
     return next_nodes
@@ -340,7 +371,6 @@ if __name__ == '__main__':
     t0 = datetime.now()
 
     # Initialize the processing list
-    EVERY = 5
     base = Node(array('i', (i for i in range(0, N_WORDS) if i % EVERY == 0)))
     to_process = [base]
 
@@ -355,14 +385,20 @@ if __name__ == '__main__':
 
     t1 = datetime.now()
 
-    for name, scorer in [
+    TRIALS = [
         # ('Max Depth | Sum Depth', score_depth),
         # ('Unsolved | Average', score_unsolved_first),
         ('Unsolved | Average (Weighted)', score_weighted_unsolved_first),
         # ('Average | Unsolved (Weighted)', score_weighted_average_first),
-    ]:
+    ]
+    for name, scorer in TRIALS:
         print('Trying scoring method:', name)
-        top = base  # if we have multiple models need to copy: base.copy()
+        if name == TRIALS[-1][0]:
+            # Last step through, we can kill things
+            top = base
+        else:
+            # Need to make sure it's a copy so we don't pollute it
+            top = base.copy()
         t2 = datetime.now()
         top.keep_best(scorer)
         t3 = datetime.now()
@@ -375,10 +411,15 @@ if __name__ == '__main__':
 
         top.store({
             'N': len(top.possible),
+            'Prune Limit': PRUNE_LIMIT,
             'Candidates': MAX_CANDIDATES,
             'Hard': HARD,
             'Method': name,
             'Time': int(t * 1000) / 1000,
         }, nyt_words)
 
-        print(f"Time taken = {t}s ({(t3 - t2).total_seconds()} to prune)")
+        print(f"Time taken = {t}s ({(t3 - t2).total_seconds()} to select best paths)")
+
+        top.attempts = top.attempts[:1]
+        with open('tree.pickle', 'wb') as f:
+            pickle.dump(top, f)
