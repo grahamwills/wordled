@@ -46,22 +46,22 @@ class Solution:
         return f"{self.value} (#{self.index} - {self.when})"
 
 
-WORDS: List[Word]
+WORDS: Tuple[Word]
 N_WORDS: int
-OUTCOMES: [str]
+OUTCOMES: Tuple[str]
 SCORES: bytes
-SOLUTIONS: List[Solution]
+SOLUTIONS: Tuple[Solution]
 
 # These are the words we will use
 with open('resources/words.pickle', 'rb') as f:
-    WORDS = pickle.load(f)
+    WORDS = tuple(pickle.load(f))
 N_WORDS = len(WORDS)
 
 WORD_MAP = dict(((z.value, i) for i, z in enumerate(WORDS)))
 
 # Pickled outcomes
 with open('resources/outcomes.pickle', 'rb') as f:
-    OUTCOMES: [str] = pickle.load(f)
+    OUTCOMES: Tuple[str] = tuple(pickle.load(f))
 
 # Pickled scores
 with open('resources/scores.pickle', 'rb') as f:
@@ -69,7 +69,7 @@ with open('resources/scores.pickle', 'rb') as f:
 
 # Pickled solutions
 with open('resources/solutions.pickle', 'rb') as f:
-    SOLUTIONS: bytes = pickle.load(f)
+    SOLUTIONS: Tuple[Solution] = tuple(pickle.load(f))
 
 print(f'READ {N_WORDS} WORDS')
 print(f'READ {len(OUTCOMES)} PRE_CALCULATED OUTCOMES')
@@ -274,14 +274,14 @@ class Node:
             return [f"{WORDS[self.possible[0]]}:GGGGG"]
 
 
-def evaluate_possibilities(guess: int, possible: list[int], limit: int) -> dict[int, array] or None:
+def evaluate_possibilities(guess: int, possible: array, limit: int) -> dict[int, array] or None:
     """ limit is the largest set to split allowed"""
     outcomes = {}
     for p in possible:
         guess_result = SCORES[guess * N_WORDS + p]
         outcome_possibles = outcomes.get(guess_result, None)
         if not outcome_possibles:
-            outcomes[guess_result] = array('i', [p])
+            outcomes[guess_result] = array('H', [p])
         elif len(outcome_possibles) < limit:
             outcome_possibles.append(p)
         else:
@@ -289,7 +289,7 @@ def evaluate_possibilities(guess: int, possible: list[int], limit: int) -> dict[
     return outcomes
 
 
-def add_candidates_to_node(node: Node, candidates: [Candidate], needs_splitting: [Node]):
+def add_candidates_to_node(node: Node, candidates: Iterable[Candidate], needs_splitting: [Node]):
     attempts = []
     for c in candidates:
         segments = []
@@ -304,18 +304,18 @@ def add_candidates_to_node(node: Node, candidates: [Candidate], needs_splitting:
 
 def find_best_candidates(node) -> List[Candidate]:
     # All possible words could be used
-    candidates = node.possible if HARD else range(N_WORDS)
+    guesses = node.possible if HARD else range(N_WORDS)
 
     # Sorted list, with the worst being the last
     best: List[Candidate] = []
     limit = 999999  # The worst we can tolerate
-    for c in candidates:
-        outcomes = evaluate_possibilities(c, node.possible, limit)
+    for g in guesses:
+        outcomes = evaluate_possibilities(g, node.possible, limit)
         if not outcomes:
             continue
 
         candidate_max_split_len = max(len(a) for a in outcomes.values())
-        candidate = Candidate(candidate_max_split_len, c, outcomes)
+        candidate = Candidate(candidate_max_split_len, g, outcomes)
         if candidate_max_split_len == 1:
             # This is the best we could ever have
             return [candidate]
@@ -420,6 +420,6 @@ if __name__ == '__main__':
 
         print(f"Time taken = {t}s ({(t3 - t2).total_seconds()} to select best paths)")
 
-        top.attempts = top.attempts[:1]
-        with open('tree.pickle', 'wb') as f:
-            pickle.dump(top, f)
+        # top.attempts = top.attempts[:1]
+        # with open('tree.pickle', 'wb') as f:
+        #     pickle.dump(top, f)
