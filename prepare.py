@@ -7,7 +7,7 @@ from urllib.request import urlopen
 
 from bs4 import BeautifulSoup
 
-from model import Word, Solution
+from model import Solution, Word
 
 G = 71
 Y = 89
@@ -44,75 +44,59 @@ class DictionaryEntry:
 
 
 def read_words_5() -> [Word]:
-    words = set()
-    with open('resources/combined words.txt', 'rt') as f:
-        for line in f.readlines():
+    result = set()
+    with open('resources/base words.txt', 'rt') as file:
+        for line in file.readlines():
             line = line.strip()
             if len(line) == 5:
-                words.add(line)
+                result.add(line)
 
     f_map = defaultdict(lambda: 10000.0)
-    with open('resources/unigram_freq.csv', 'rt') as f:
-        f.readline()  # Skip header
-        for line in f.readlines():
+    with open('resources/word frequencies.csv', 'rt') as file:
+        file.readline()  # Skip header
+        for line in file.readlines():
             line = line.split(',')
             f_map[line[0].strip()] = float(line[1].strip())
 
     base = f_map['the']
 
-    missing = [w for w in words if w not in f_map]
+    missing = [w for w in result if w not in f_map]
     print('No freq:', missing)
-    tuples = [(f_map[w], w) for w in words]
+    tuples = [(f_map[w], w) for w in result]
     tuples.sort(reverse=True)
-    results = [Word(t[1], i, t[0] / base) for i, t in enumerate(tuples)]
+    results = [Word(t[1], idx, t[0] / base) for idx, t in enumerate(tuples)]
     return results
 
 
-def read_dict(refresh: bool = False) -> List[DictionaryEntry]:
-    if refresh:
-        results = []
-        base = Path('resources/Dictionary')
-        for path in base.glob('?.csv'):
-            with open(path, 'rt', encoding='ISO 8859-1') as f:
-                for line in f.readlines():
-                    if len(line) > 5:
-                        word = DictionaryEntry.from_line(line)
-                        results.append(word)
-
-        with open('resources/dict.pickle', 'wb') as f:
-            pickle.dump(results, f)
-
-
-    else:
-        with open('resources/dict.pickle', 'rb') as f:
-            results = pickle.load(f)
+def read_dict() -> List[DictionaryEntry]:
+    results = []
+    base = Path('resources/Dictionary')
+    for path in base.glob('?.csv'):
+        with open(path, 'rt', encoding='ISO 8859-1') as file:
+            for line in file.readlines():
+                if len(line) > 5:
+                    word = DictionaryEntry.from_line(line)
+                    results.append(word)
     return results
 
 
-def read_solutions(refresh: bool = False) -> List[Solution]:
-    if refresh:
-        results = []
-        solutions_url = 'https://www.stockq.org/life/wordle-answers.php#all'
-        with urlopen(solutions_url) as response:
-            soup = BeautifulSoup(response, 'html.parser')
-            for tr in soup.find_all('tr'):
-                items = tr.findAll('td')
-                n = len(items)
-                if n == 3 or n == 6:
-                    sol = Solution.from_triple(items[0], items[1], items[2])
-                    results.append(sol)
-                if n == 6:
-                    sol = Solution.from_triple(items[3], items[4], items[5])
-                    results.append(sol)
+def read_solutions() -> List[Solution]:
+    results = []
+    solutions_url = 'https://www.stockq.org/life/wordle-answers.php#all'
+    with urlopen(solutions_url) as response:
+        soup = BeautifulSoup(response, 'html.parser')
+        for tr in soup.find_all('tr'):
+            items = tr.findAll('td')
+            n_items = len(items)
+            if n_items == 3 or n_items == 6:
+                sol = Solution.from_triple(items[0], items[1], items[2])
+                results.append(sol)
+            if n_items == 6:
+                sol = Solution.from_triple(items[3], items[4], items[5])
+                results.append(sol)
 
-        with open('resources/solutions.pickle', 'wb') as f:
-            pickle.dump(results, f)
-
-        # Simple check we have all indices
-        assert [s.index for s in results] == list(range(len(results)))
-    else:
-        with open('resources/solutions.pickle', 'rb') as f:
-            results = pickle.load(f)
+    with open('resources/solutions.pickle', 'wb') as file:
+        pickle.dump(results, file)
     return results
 
 
@@ -121,16 +105,16 @@ def evaluate(choice: str, target: str) -> bytes:
     available = [c for c in target]
 
     # Handle greens
-    for i in range(5):
-        if choice[i] == target[i]:
-            outcome[i] = G
-            available.remove(choice[i])
+    for idx in range(5):
+        if choice[idx] == target[idx]:
+            outcome[idx] = G
+            available.remove(choice[idx])
 
     # Handle yellows
-    for i in range(5):
-        if outcome[i] == N and choice[i] in available:
-            outcome[i] = Y
-            available.remove(choice[i])
+    for idx in range(5):
+        if outcome[idx] == N and choice[idx] in available:
+            outcome[idx] = Y
+            available.remove(choice[idx])
 
     return bytes(outcome)
 
@@ -147,27 +131,25 @@ def build_score_possibilities() -> [bytes]:
 
 
 if __name__ == '__main__':
-    refresh = True
-    solutions = read_solutions(refresh)
+    solutions = read_solutions()
     words = read_words_5()
-    dictionary = read_dict(refresh)
+    dictionary = read_dict()
 
     print("#5 letter words: ", len(words))
 
+    # Remove simple noun plurals (Wordle does not use them)
     noun_4 = {w.value + 's' for w in dictionary if len(w.value) == 4 and w.is_noun()}
     noun_3 = {w.value + 'es' for w in dictionary if len(w.value) == 3 and w.is_noun()}
-
     for w in list(words):
         if w.value in noun_4 or w in noun_3:
             words.remove(w)
-
     print("#non plural    : ", len(words))
 
     word_set = {w.value for w in words}
 
     for s in solutions:
         if s.value not in word_set:
-            print("Missing:", s)
+            print("Missing solution:", s)
 
     n = len(words)
     with open('resources/words.pickle', 'wb') as f:
